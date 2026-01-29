@@ -1,0 +1,77 @@
+# HuggingFace dataset configuration for Parakeet RNNT finetuning
+# Extends finetune_base.yaml
+
+defaults:
+  - finetune_base
+
+# Override data source
+data_source: "huggingface"
+
+# HuggingFace dataset configuration
+hf_data_cfg:
+  # Dataset identifier on HuggingFace Hub
+  path: "mozilla-foundation/common_voice_16_1"
+
+  # Dataset subset/configuration name (often language code)
+  name: "hi"  # Hindi
+
+  # Split names
+  train_split: "train"
+  val_split: "validation"
+
+  # Column mappings - adjust based on your dataset structure
+  # For Common Voice: audio is in "audio" column with "array" and "sampling_rate"
+  audio_column: "audio"  # Column containing audio data
+  text_column: "sentence"  # Column containing transcription
+
+  # Language tag for Parakeet multilingual format
+  # Parakeet outputs: "transcription <lang-tag>" (e.g., "hello world <en-US>")
+  # Set to null to not append any tag (if tags are already in your data)
+  # Common tags: en-US, hi-IN, de-DE, fr-FR, es-ES, etc.
+  language_tag: "hi-IN"  # Hindi (India)
+
+  # Streaming mode for large datasets
+  streaming: false
+
+  # Optional: limit number of examples (useful for testing)
+  max_train_samples: null
+  max_val_samples: null
+
+  # Cache directory for downloaded data
+  cache_dir: null  # Uses HF default if null
+
+  # Trust remote code (needed for some datasets)
+  trust_remote_code: false
+
+# Override model settings for HuggingFace data
+model:
+  train_ds:
+    manifest_filepath: "__hf_generated__"  # Placeholder, generated at runtime
+
+  validation_ds:
+    manifest_filepath: "__hf_generated__"  # Placeholder, generated at runtime
+
+# Example configurations for popular datasets:
+#
+# Common Voice (any language):
+#   hf_data_cfg:
+#     path: "mozilla-foundation/common_voice_16_1"
+#     name: "hi"  # or "de", "fr", "es", etc.
+#     audio_column: "audio"
+#     text_column: "sentence"
+#
+# LibriSpeech:
+#   hf_data_cfg:
+#     path: "librispeech_asr"
+#     name: "clean"
+#     train_split: "train.100"
+#     val_split: "validation"
+#     audio_column: "audio"
+#     text_column: "text"
+#
+# FLEURS (multilingual):
+#   hf_data_cfg:
+#     path: "google/fleurs"
+#     name: "hi_in"
+#     audio_column: "audio"
+#     text_column: "transcription"

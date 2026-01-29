@@ -1,0 +1,466 @@
+#!/usr/bin/env python3
+"""
+Finetune Parakeet RNNT 1.1B model using NeMo framework.
+
+This script supports:
+- HuggingFace datasets (streaming or downloaded)
+- Local audio files with NeMo manifests
+- Continuing training from previously finetuned models
+- Multi-GPU training via DDP
+
+Usage:
+    # Finetune with HuggingFace dataset
+    python finetune.py \
+        --config configs/finetune_huggingface.yaml \
+        --model /path/to/parakeet-rnnt-1.1b-multilingual.nemo \
+        --output_dir ./experiments/hindi_finetune \
+        hf_data_cfg.path=mozilla-foundation/common_voice_16_1 \
+        hf_data_cfg.name=hi
+
+    # Finetune with local data
+    python finetune.py \
+        --config configs/finetune_local.yaml \
+        --model /path/to/parakeet-rnnt-1.1b-multilingual.nemo \
+        --output_dir ./experiments/local_finetune \
+        local_data_cfg.train_manifest=./data/train_manifest.json \
+        local_data_cfg.val_manifest=./data/val_manifest.json
+
+    # Continue training from checkpoint
+    python finetune.py \
+        --config configs/finetune_local.yaml \
+        --model ./experiments/previous/checkpoints/best_model.nemo \
+        --output_dir ./experiments/continued_finetune
+"""
+
+import argparse
+import os
+import sys
+import tempfile
+from pathlib import Path
+from typing import Optional
+
+import pytorch_lightning as pl
+import torch
+from omegaconf import DictConfig, OmegaConf
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Finetune Parakeet RNNT model"
+    )
+    parser.add_argument(
+        "--config",
+        type=str,
+        required=True,
+        help="Path to configuration YAML file"
+    )
+    parser.add_argument(
+        "--model",
+        type=str,
+        required=True,
+        help="Path to base .nemo model or previously finetuned model"
+    )
+    parser.add_argument(
+        "--output_dir",
+        type=str,
+        required=True,
+        help="Directory to save checkpoints and logs"
+    )
+    parser.add_argument(
+        "--resume",
+        type=str,
+        default=None,
+        help="Path to checkpoint to resume training from (optional)"
+    )
+    parser.add_argument(
+        "--num_gpus",
+        type=int,
+        default=1,
+        help="Number of GPUs to use (default: 1)"
+    )
+    parser.add_argument(
+        "--dry_run",
+        action="store_true",
+        help="Validate config without training"
+    )
+
+    # Allow arbitrary config overrides via Hydra-style arguments
+    args, overrides = parser.parse_known_args()
+    return args, overrides
+
+
+def apply_config_overrides(cfg: DictConfig, overrides: list) -> DictConfig:
+    """Apply command-line config overrides in Hydra style."""
+    for override in overrides:
+        if '=' not in override:
+            print(f"Warning: Ignoring invalid override (missing '='): {override}")
+            continue
+
+        key, value = override.split('=', 1)
+
+        # Handle nested keys (e.g., hf_data_cfg.path)
+        keys = key.split('.')
+
+        # Convert value to appropriate type
+        if value.lower() == 'true':
+            value = True
+        elif value.lower() == 'false':
+            value = False
+        elif value.lower() == 'null' or value.lower() == 'none':
+            value = None
+        else:
+            try:
+                value = int(value)
+            except ValueError:
+                try:
+                    value = float(value)
+                except ValueError:
+                    pass  # Keep as string
+
+        # Navigate to the correct config node and set value
+        node = cfg
+        for k in keys[:-1]:
+            if k not in node:
+                node[k] = {}
+            node = node[k]
+        node[keys[-1]] = value
+
+    return cfg
+
+
+def prepare_hf_manifests(cfg: DictConfig, output_dir: str):
+    """Prepare NeMo manifests from HuggingFace dataset."""
+    from datasets import load_dataset
+    import soundfile as sf
+    import numpy as np
+    import json
+    from tqdm import tqdm
+
+    hf_cfg = cfg.hf_data_cfg
+
+    print(f"Loading HuggingFace dataset: {hf_cfg.path}")
+    if hf_cfg.get('name'):
+        print(f"Subset: {hf_cfg.name}")
+    if hf_cfg.get('language_tag'):
+        print(f"Language tag: <{hf_cfg.language_tag}> (will be appended to all transcripts)")
+
+    # Load dataset
+    train_ds = load_dataset(
+        hf_cfg.path,
+        hf_cfg.get('name'),
+        split=hf_cfg.train_split,
+        streaming=hf_cfg.get('streaming', False),
+        cache_dir=hf_cfg.get('cache_dir'),
+        trust_remote_code=hf_cfg.get('trust_remote_code', False)
+    )
+
+    val_ds = load_dataset(
+        hf_cfg.path,
+        hf_cfg.get('name'),
+        split=hf_cfg.val_split,
+        streaming=hf_cfg.get('streaming', False),
+        cache_dir=hf_cfg.get('cache_dir'),
+        trust_remote_code=hf_cfg.get('trust_remote_code', False)
+    )
+
+    # Apply sample limits if specified
+    max_train = hf_cfg.get('max_train_samples')
+    max_val = hf_cfg.get('max_val_samples')
+
+    if max_train and not hf_cfg.get('streaming', False):
+        train_ds = train_ds.select(range(min(max_train, len(train_ds))))
+    if max_val and not hf_cfg.get('streaming', False):
+        val_ds = val_ds.select(range(min(max_val, len(val_ds))))
+
+    # Prepare output directories
+    audio_dir = os.path.join(output_dir, "audio")
+    os.makedirs(os.path.join(audio_dir, "train"), exist_ok=True)
+    os.makedirs(os.path.join(audio_dir, "val"), exist_ok=True)
+
+    def process_split(dataset, split_name, max_samples=None):
+        """Process a dataset split and create manifest."""
+        manifest_path = os.path.join(output_dir, f"{split_name}_manifest.json")
+        entries = []
+
+        audio_col = hf_cfg.audio_column
+        text_col = hf_cfg.text_column
+        min_dur = cfg.model.train_ds.get('min_duration', 0.1)
+        max_dur = cfg.model.train_ds.get('max_duration', 20.0)
+        lang_tag = hf_cfg.get('language_tag')
+
+        iterator = enumerate(dataset)
+        if not hf_cfg.get('streaming', False):
+            total = min(max_samples, len(dataset)) if max_samples else len(dataset)
+            iterator = enumerate(tqdm(dataset, total=total, desc=f"Processing {split_name}"))
+
+        for idx, example in iterator:
+            if max_samples and idx >= max_samples:
+                break
+
+            try:
+                # Get audio
+                audio_data = example.get(audio_col)
+                if audio_data is None:
+                    continue
+
+                if isinstance(audio_data, dict):
+                    array = audio_data.get("array")
+                    sample_rate = audio_data.get("sampling_rate", 16000)
+                else:
+                    continue
+
+                if array is None:
+                    continue
+
+                # Get text
+                text = example.get(text_col, "")
+                if not text or not isinstance(text, str):
+                    continue
+                text = text.strip()
+                if not text:
+                    continue
+
+                # Convert to numpy
+                if not isinstance(array, np.ndarray):
+                    array = np.array(array)
+
+                # Calculate duration
+                duration = len(array) / sample_rate
+
+                # Filter by duration
+                if duration < min_dur or duration > max_dur:
+                    continue
+
+                # Resample to 16kHz if needed
+                if sample_rate != 16000:
+                    try:
+                        import librosa
+                        array = librosa.resample(array, orig_sr=sample_rate, target_sr=16000)
+                    except ImportError:
+                        from scipy import signal
+                        num_samples = int(len(array) * 16000 / sample_rate)
+                        array = signal.resample(array, num_samples)
+                    sample_rate = 16000
+                    duration = len(array) / sample_rate
+
+                # Save audio
+                audio_path = os.path.join(audio_dir, split_name, f"{idx:08d}.wav")
+                sf.write(audio_path, array, sample_rate)
+
+                # Append language tag if specified (Parakeet multilingual format)
+                if lang_tag:
+                    text = f"{text} <{lang_tag}>"
+
+                entries.append({
+                    "audio_filepath": os.path.abspath(audio_path),
+                    "text": text,
+                    "duration": round(duration, 3)
+                })
+
+            except Exception as e:
+                print(f"Warning: Error processing {split_name} example {idx}: {e}")
+                continue
+
+        # Write manifest
+        with open(manifest_path, 'w', encoding='utf-8') as f:
+            for entry in entries:
+                f.write(json.dumps(entry, ensure_ascii=False) + '\n')
+
+        total_duration = sum(e["duration"] for e in entries)
+        print(f"{split_name}: {len(entries)} examples, {total_duration/3600:.2f} hours")
+
+        return manifest_path
+
+    print("\nPreparing training data...")
+    train_manifest = process_split(train_ds, "train", max_train)
+
+    print("\nPreparing validation data...")
+    val_manifest = process_split(val_ds, "val", max_val)
+
+    return train_manifest, val_manifest
+
+
+def setup_trainer(cfg: DictConfig, num_gpus: int) -> pl.Trainer:
+    """Setup PyTorch Lightning trainer."""
+    from nemo.utils.exp_manager import exp_manager
+
+    trainer_cfg = cfg.trainer
+
+    # Update GPU settings
+    if num_gpus > 1:
+        trainer_cfg.devices = num_gpus
+        trainer_cfg.strategy = "ddp"
+    else:
+        trainer_cfg.devices = 1
+        trainer_cfg.strategy = "auto"
+
+    # Create trainer
+    trainer = pl.Trainer(**OmegaConf.to_container(trainer_cfg))
+
+    return trainer
+
+
+def load_model(model_path: str, cfg: DictConfig):
+    """Load model from .nemo file."""
+    from nemo.collections.asr.models import EncDecRNNTBPEModel
+
+    print(f"Loading model from: {model_path}")
+    model = EncDecRNNTBPEModel.restore_from(model_path)
+
+    return model
+
+
+def setup_model_for_finetuning(model, cfg: DictConfig):
+    """Configure model for finetuning."""
+    # Update data loaders
+    if cfg.model.train_ds.manifest_filepath and cfg.model.train_ds.manifest_filepath != "__hf_generated__":
+        model.setup_training_data(cfg.model.train_ds)
+
+    if cfg.model.validation_ds.manifest_filepath and cfg.model.validation_ds.manifest_filepath != "__hf_generated__":
+        model.setup_validation_data(cfg.model.validation_ds)
+
+    # Update optimizer
+    if cfg.model.get('optim'):
+        model.setup_optimization(cfg.model.optim)
+
+    # Update spec augment if specified
+    if cfg.model.get('spec_augment'):
+        spec_aug_cfg = cfg.model.spec_augment
+        if hasattr(model, 'spec_augmentation') and model.spec_augmentation is not None:
+            model.spec_augmentation.freq_masks = spec_aug_cfg.get('freq_masks', 2)
+            model.spec_augmentation.freq_width = spec_aug_cfg.get('freq_width', 27)
+            model.spec_augmentation.time_masks = spec_aug_cfg.get('time_masks', 10)
+            model.spec_augmentation.time_width = spec_aug_cfg.get('time_width', 0.05)
+
+    return model
+
+
+def main():
+    args, overrides = parse_args()
+
+    # Load configuration
+    print(f"Loading configuration from: {args.config}")
+    cfg = OmegaConf.load(args.config)
+
+    # Handle defaults/inheritance
+    if cfg.get('defaults'):
+        base_configs = cfg.defaults
+        if isinstance(base_configs, list):
+            for base in base_configs:
+                if isinstance(base, str):
+                    base_path = os.path.join(os.path.dirname(args.config), f"{base}.yaml")
+                    if os.path.exists(base_path):
+                        base_cfg = OmegaConf.load(base_path)
+                        cfg = OmegaConf.merge(base_cfg, cfg)
+
+    # Apply command-line overrides
+    cfg = apply_config_overrides(cfg, overrides)
+
+    # Set output directory
+    cfg.exp_manager.exp_dir = args.output_dir
+    os.makedirs(args.output_dir, exist_ok=True)
+
+    # Set model path
+    cfg.model.init_from_nemo_model = args.model
+
+    # Set resume checkpoint if specified
+    if args.resume:
+        cfg.model.resume_from_checkpoint = args.resume
+
+    # Print final config
+    print("\n" + "="*60)
+    print("Configuration:")
+    print("="*60)
+    print(OmegaConf.to_yaml(cfg))
+    print("="*60 + "\n")
+
+    if args.dry_run:
+        print("Dry run complete. Configuration is valid.")
+        return
+
+    # Import NeMo (delayed import for faster --help)
+    try:
+        import nemo.collections.asr as nemo_asr
+        from nemo.utils.exp_manager import exp_manager
+    except ImportError:
+        print("Error: NeMo is not installed. Install with: pip install nemo_toolkit[asr]")
+        sys.exit(1)
+
+    # Prepare data based on source
+    data_source = cfg.get('data_source', 'local')
+
+    if data_source == 'huggingface':
+        print("\nPreparing HuggingFace dataset...")
+        data_dir = os.path.join(args.output_dir, "hf_data")
+        os.makedirs(data_dir, exist_ok=True)
+
+        train_manifest, val_manifest = prepare_hf_manifests(cfg, data_dir)
+
+        # Update config with generated manifests
+        cfg.model.train_ds.manifest_filepath = train_manifest
+        cfg.model.validation_ds.manifest_filepath = val_manifest
+
+    elif data_source == 'local':
+        # Validate manifest paths
+        train_manifest = cfg.model.train_ds.manifest_filepath
+        val_manifest = cfg.model.validation_ds.manifest_filepath
+
+        if not train_manifest or train_manifest == "__hf_generated__":
+            train_manifest = cfg.get('local_data_cfg', {}).get('train_manifest')
+
+        if not val_manifest or val_manifest == "__hf_generated__":
+            val_manifest = cfg.get('local_data_cfg', {}).get('val_manifest')
+
+        if not train_manifest:
+            print("Error: Training manifest not specified.")
+            print("Use: local_data_cfg.train_manifest=/path/to/manifest.json")
+            sys.exit(1)
+
+        if not os.path.exists(train_manifest):
+            print(f"Error: Training manifest not found: {train_manifest}")
+            sys.exit(1)
+
+        if val_manifest and not os.path.exists(val_manifest):
+            print(f"Warning: Validation manifest not found: {val_manifest}")
+
+        cfg.model.train_ds.manifest_filepath = train_manifest
+        cfg.model.validation_ds.manifest_filepath = val_manifest
+
+        print(f"Training manifest: {train_manifest}")
+        print(f"Validation manifest: {val_manifest}")
+
+    # Setup trainer
+    print("\nSetting up trainer...")
+    trainer = setup_trainer(cfg, args.num_gpus)
+
+    # Setup experiment manager
+    exp_manager(trainer, OmegaConf.to_container(cfg.exp_manager))
+
+    # Load model
+    print("\nLoading model...")
+    model = load_model(args.model, cfg)
+
+    # Configure model for finetuning
+    print("Configuring model for finetuning...")
+    model = setup_model_for_finetuning(model, cfg)
+
+    # Start training
+    print("\n" + "="*60)
+    print("Starting training...")
+    print("="*60 + "\n")
+
+    # Resume from checkpoint if specified
+    ckpt_path = args.resume or cfg.model.get('resume_from_checkpoint')
+
+    trainer.fit(model, ckpt_path=ckpt_path)
+
+    # Save final model
+    final_model_path = os.path.join(args.output_dir, "final_model.nemo")
+    model.save_to(final_model_path)
+    print(f"\nFinal model saved to: {final_model_path}")
+
+    print("\nTraining complete!")
+
+
+if __name__ == "__main__":
+    main()

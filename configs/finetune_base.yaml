@@ -1,0 +1,104 @@
+# Base configuration for Parakeet RNNT 1.1B finetuning
+# This file contains shared settings - extend with finetune_huggingface.yaml or finetune_local.yaml
+
+name: "parakeet_rnnt_finetune"
+
+# Trainer configuration
+trainer:
+  devices: 1
+  accelerator: gpu
+  strategy: auto  # Use ddp for multi-GPU
+  max_epochs: 50
+  precision: "bf16-mixed"  # Use bf16 on Ampere/Ada GPUs
+  accumulate_grad_batches: 2
+  gradient_clip_val: 1.0
+  val_check_interval: 0.5  # Validate twice per epoch
+  log_every_n_steps: 50
+  enable_checkpointing: true
+  logger: true
+  num_sanity_val_steps: 2
+  check_val_every_n_epoch: null  # Use val_check_interval instead
+
+# Experiment manager (logging and checkpointing)
+exp_manager:
+  exp_dir: null  # Set via --output_dir
+  name: ${name}
+  create_tensorboard_logger: true
+  create_wandb_logger: false
+  create_checkpoint_callback: true
+  checkpoint_callback_params:
+    monitor: "val_wer"
+    mode: "min"
+    save_top_k: 5
+    save_last: true
+    every_n_epochs: 1
+    filename: "{epoch:02d}-{val_wer:.4f}"
+  resume_if_exists: true
+  resume_ignore_no_checkpoint: true
+
+# Model configuration
+model:
+  # Model loading options
+  init_from_nemo_model: null  # Path to base .nemo model (set via --model)
+  resume_from_checkpoint: null  # Path to checkpoint to resume from
+
+  # Training data configuration
+  train_ds:
+    manifest_filepath: null  # Set by data source config
+    sample_rate: 16000
+    batch_size: 48  # Optimized for 80-96GB VRAM
+    min_duration: 0.1
+    max_duration: 20.0
+    shuffle: true
+    num_workers: 16
+    pin_memory: true
+    trim_silence: false
+    is_tarred: false
+    tarred_audio_filepaths: null
+
+  # Validation data configuration
+  validation_ds:
+    manifest_filepath: null  # Set by data source config
+    sample_rate: 16000
+    batch_size: 32
+    min_duration: 0.1
+    max_duration: 20.0
+    shuffle: false
+    num_workers: 8
+    pin_memory: true
+
+  # Tokenizer configuration
+  tokenizer:
+    update_tokenizer: false  # Set true to use custom tokenizer
+    dir: null  # Path to custom tokenizer dir if update_tokenizer=true
+    type: "bpe"
+
+  # Optimizer configuration
+  optim:
+    name: adamw
+    lr: 1.0e-4
+    betas: [0.9, 0.98]
+    weight_decay: 1.0e-3
+
+    # Learning rate scheduler
+    sched:
+      name: CosineAnnealing
+      warmup_steps: 2000
+      warmup_ratio: null
+      min_lr: 1.0e-6
+      last_epoch: -1
+
+  # SpecAugment configuration (data augmentation)
+  spec_augment:
+    freq_masks: 2
+    freq_width: 27
+    time_masks: 10
+    time_width: 0.05  # Proportion of time dimension
+
+  # Joint network configuration (optional tuning)
+  joint:
+    fuse_loss_wer: true
+    fused_batch_size: null  # Auto-determine based on batch_size
+
+# Data source selection: "huggingface" or "local"
+data_source: "local"

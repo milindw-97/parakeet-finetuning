@@ -1,0 +1,21 @@
+# NeMo and PyTorch
+nemo_toolkit[asr]>=1.23.0
+pytorch-lightning>=2.0.0
+torch>=2.0.0
+
+# Configuration
+hydra-core>=1.3.0
+omegaconf>=2.3.0
+
+# Data handling
+datasets>=2.14.0
+soundfile
+librosa
+pandas
+tqdm
+
+# Tokenizer training (optional, for custom tokenizers)
+sentencepiece>=0.1.99
+
+# Evaluation
+jiwer  # For WER calculation

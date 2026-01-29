@@ -1,0 +1,97 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Jupyter Notebook
+.ipynb_checkpoints/
+
+# PyTorch / NeMo
+*.pt
+*.pth
+*.ckpt
+*.nemo
+lightning_logs/
+nemo_experiments/
+
+# Experiment outputs
+experiments/
+outputs/
+results/
+logs/
+tensorboard/
+wandb/
+
+# Data files
+data/
+*.json
+!configs/*.yaml
+manifests/
+audio/
+*.wav
+*.flac
+*.mp3
+*.ogg
+
+# HuggingFace cache
+.cache/
+hf_data/
+
+# Tokenizer files (generated)
+tokenizer/
+*.model
+*.vocab
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Environment variables
+.env
+.env.local
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.log
+
+# Large files
+*.tar
+*.tar.gz
+*.zip
+*.rar

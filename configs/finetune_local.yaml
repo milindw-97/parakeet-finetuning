@@ -1,0 +1,42 @@
+# Local data configuration for Parakeet RNNT finetuning
+# Extends finetune_base.yaml
+
+defaults:
+  - finetune_base
+
+# Override data source
+data_source: "local"
+
+# Local data configuration
+local_data_cfg:
+  # Path to training manifest (NeMo JSONL format)
+  # Each line: {"audio_filepath": "path/to/audio.wav", "text": "transcription", "duration": 3.5}
+  train_manifest: null  # Required - set via command line or edit here
+
+  # Path to validation manifest
+  val_manifest: null  # Required - set via command line or edit here
+
+# Override model settings for local data
+model:
+  train_ds:
+    manifest_filepath: ${local_data_cfg.train_manifest}
+
+  validation_ds:
+    manifest_filepath: ${local_data_cfg.val_manifest}
+
+# Example usage:
+#
+# 1. First prepare your manifest using prepare_local_data.py:
+#    python scripts/prepare_local_data.py \
+#      --input /path/to/transcripts.csv \
+#      --audio_dir /path/to/audio \
+#      --output_dir ./data \
+#      --val_split 0.1
+#
+# 2. Then run finetuning:
+#    python finetune.py \
+#      --config configs/finetune_local.yaml \
+#      --model /path/to/parakeet-rnnt-1.1b-multilingual.nemo \
+#      --output_dir ./experiments/my_finetune \
+#      local_data_cfg.train_manifest=./data/train_manifest.json \
+#      local_data_cfg.val_manifest=./data/val_manifest.json
