@@ -1,5 +1,8 @@
 # Base configuration for Parakeet RNNT 1.1B finetuning
 # This file contains shared settings - extend with finetune_huggingface.yaml or finetune_local.yaml
+#
+# NOTE: RNNT loss is memory-intensive. If you get OOM, reduce batch_size or max_duration.
+# Run with: PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True python finetune.py ...
 
 # Trainer configuration
 trainer:
@@ -7,8 +10,8 @@ trainer:
   accelerator: gpu
   strategy: auto  # Use ddp for multi-GPU
   max_epochs: 50
-  precision: "bf16-mixed"  # Use bf16 on Ampere/Ada GPUs
-  accumulate_grad_batches: 2
+  precision: "bf16-mixed"  # Use bf16 on Ampere/Ada/Blackwell GPUs
+  accumulate_grad_batches: 4  # Effective batch = batch_size * 4
   gradient_clip_val: 1.0
   val_check_interval: 1  # Validate every epoch (1.0 = 100% of epoch)
   check_val_every_n_epoch: 1  # Required for float val_check_interval
@@ -44,11 +47,11 @@ model:
   train_ds:
     manifest_filepath: null  # Set by data source config
     sample_rate: 16000
-    batch_size: 48  # Optimized for 80-96GB VRAM
+    batch_size: 16  # RNNT loss is memory-heavy; effective batch = 16 * 4 = 64
     min_duration: 0.1
-    max_duration: 20.0
+    max_duration: 15.0  # Reduced to save memory
     shuffle: true
-    num_workers: 16
+    num_workers: 8
     pin_memory: true
     trim_silence: false
     is_tarred: false
@@ -58,11 +61,11 @@ model:
   validation_ds:
     manifest_filepath: null  # Set by data source config
     sample_rate: 16000
-    batch_size: 32
+    batch_size: 8  # Smaller for validation to avoid OOM
     min_duration: 0.1
-    max_duration: 20.0
+    max_duration: 15.0
     shuffle: false
-    num_workers: 8
+    num_workers: 4
     pin_memory: true
 
   # Tokenizer configuration
