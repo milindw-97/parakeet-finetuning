@@ -83,20 +83,29 @@ def parse_args():
         action="store_true",
         help="Validate config without training"
     )
+    parser.add_argument(
+        "--debug_config",
+        action="store_true",
+        help="Print detailed config loading debug info"
+    )
 
     # Allow arbitrary config overrides via Hydra-style arguments
     args, overrides = parser.parse_known_args()
     return args, overrides
 
 
-def apply_config_overrides(cfg: DictConfig, overrides: list) -> DictConfig:
+def apply_config_overrides(cfg: DictConfig, overrides: list, verbose: bool = False) -> DictConfig:
     """Apply command-line config overrides in Hydra style."""
+    if verbose and overrides:
+        print(f"\nApplying {len(overrides)} config overrides:")
+
     for override in overrides:
         if '=' not in override:
             print(f"Warning: Ignoring invalid override (missing '='): {override}")
             continue
 
         key, value = override.split('=', 1)
+        original_value = value
 
         # Handle nested keys (e.g., hf_data_cfg.path)
         keys = key.split('.')
@@ -116,6 +125,9 @@ def apply_config_overrides(cfg: DictConfig, overrides: list) -> DictConfig:
                     value = float(value)
                 except ValueError:
                     pass  # Keep as string
+
+        if verbose:
+            print(f"  {key} = {value!r} (from '{original_value}')")
 
         # Navigate to the correct config node and set value
         node = cfg
@@ -338,10 +350,13 @@ def setup_model_for_finetuning(model, cfg: DictConfig):
     return model
 
 
-def load_config_with_inheritance(config_path: str) -> DictConfig:
+def load_config_with_inheritance(config_path: str, verbose: bool = False) -> DictConfig:
     """Load config file and merge with base configs specified in 'defaults'."""
     cfg = OmegaConf.load(config_path)
     config_dir = os.path.dirname(config_path)
+
+    if verbose:
+        print(f"\n[DEBUG] Loaded config from: {config_path}")
 
     # Handle defaults/inheritance (Hydra-style)
     defaults = OmegaConf.select(cfg, 'defaults')
@@ -351,6 +366,9 @@ def load_config_with_inheritance(config_path: str) -> DictConfig:
             defaults_list = list(defaults)
         else:
             defaults_list = [defaults]
+
+        if verbose:
+            print(f"[DEBUG] Found defaults: {defaults_list}")
 
         # Load and merge base configs first
         merged_cfg = OmegaConf.create({})
@@ -366,6 +384,8 @@ def load_config_with_inheritance(config_path: str) -> DictConfig:
 
             base_path = os.path.join(config_dir, f"{base_name}.yaml")
             if os.path.exists(base_path):
+                if verbose:
+                    print(f"[DEBUG] Loading base config: {base_path}")
                 base_cfg = OmegaConf.load(base_path)
                 merged_cfg = OmegaConf.merge(merged_cfg, base_cfg)
             else:
@@ -376,8 +396,16 @@ def load_config_with_inheritance(config_path: str) -> DictConfig:
         cfg_dict.pop('defaults', None)
         cfg = OmegaConf.create(cfg_dict)
 
+        if verbose:
+            print(f"[DEBUG] Config after removing 'defaults' key:")
+            print(OmegaConf.to_yaml(cfg))
+
         # Merge: base configs first, then current config overlays
         cfg = OmegaConf.merge(merged_cfg, cfg)
+
+        if verbose:
+            print(f"[DEBUG] Config after merging with base:")
+            print(OmegaConf.to_yaml(cfg))
 
     return cfg
 
@@ -387,10 +415,10 @@ def main():
 
     # Load configuration with inheritance
     print(f"Loading configuration from: {args.config}")
-    cfg = load_config_with_inheritance(args.config)
+    cfg = load_config_with_inheritance(args.config, verbose=args.debug_config)
 
     # Apply command-line overrides
-    cfg = apply_config_overrides(cfg, overrides)
+    cfg = apply_config_overrides(cfg, overrides, verbose=args.debug_config)
 
     # Set output directory
     cfg.exp_manager.exp_dir = args.output_dir
