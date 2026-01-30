@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# Disable CUDA graphs for RNNT decoding (compatibility fix for PyTorch 2.10+ / CUDA 13)
+import os
+os.environ["NEMO_RNNT_DISABLE_CUDA_GRAPHS"] = "1"
+
 """
 Finetune Parakeet RNNT 1.1B model using NeMo framework.
 
@@ -477,9 +481,6 @@ def load_config_with_inheritance(config_path: str, verbose: bool = False) -> Dic
 
 
 def main():
-    # Disable CUDA graphs for RNNT decoding (compatibility fix for newer PyTorch/CUDA)
-    os.environ.setdefault("NEMO_RNNT_DISABLE_CUDA_GRAPHS", "1")
-
     args, overrides = parse_args()
 
     # Load configuration with inheritance
