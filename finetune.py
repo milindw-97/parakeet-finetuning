@@ -477,6 +477,9 @@ def load_config_with_inheritance(config_path: str, verbose: bool = False) -> Dic
 
 
 def main():
+    # Disable CUDA graphs for RNNT decoding (compatibility fix for newer PyTorch/CUDA)
+    os.environ.setdefault("NEMO_RNNT_DISABLE_CUDA_GRAPHS", "1")
+
     args, overrides = parse_args()
 
     # Load configuration with inheritance
