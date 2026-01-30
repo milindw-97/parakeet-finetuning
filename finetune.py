@@ -335,23 +335,56 @@ def setup_model_for_finetuning(model, cfg: DictConfig):
     return model
 
 
+def load_config_with_inheritance(config_path: str) -> DictConfig:
+    """Load config file and merge with base configs specified in 'defaults'."""
+    cfg = OmegaConf.load(config_path)
+    config_dir = os.path.dirname(config_path)
+
+    # Handle defaults/inheritance (Hydra-style)
+    defaults = OmegaConf.select(cfg, 'defaults')
+    if defaults is not None:
+        # Convert to list if needed
+        if hasattr(defaults, '__iter__'):
+            defaults_list = list(defaults)
+        else:
+            defaults_list = [defaults]
+
+        # Load and merge base configs first
+        merged_cfg = OmegaConf.create({})
+        for default in defaults_list:
+            # Handle both string format and dict format
+            if isinstance(default, str):
+                base_name = default
+            elif hasattr(default, 'keys'):
+                # Format like: - base: finetune_base
+                base_name = list(default.values())[0]
+            else:
+                continue
+
+            base_path = os.path.join(config_dir, f"{base_name}.yaml")
+            if os.path.exists(base_path):
+                base_cfg = OmegaConf.load(base_path)
+                merged_cfg = OmegaConf.merge(merged_cfg, base_cfg)
+            else:
+                print(f"Warning: Base config not found: {base_path}")
+
+        # Remove defaults from current config before merging
+        cfg_dict = OmegaConf.to_container(cfg)
+        cfg_dict.pop('defaults', None)
+        cfg = OmegaConf.create(cfg_dict)
+
+        # Merge: base configs first, then current config overlays
+        cfg = OmegaConf.merge(merged_cfg, cfg)
+
+    return cfg
+
+
 def main():
     args, overrides = parse_args()
 
-    # Load configuration
+    # Load configuration with inheritance
     print(f"Loading configuration from: {args.config}")
-    cfg = OmegaConf.load(args.config)
-
-    # Handle defaults/inheritance
-    if cfg.get('defaults'):
-        base_configs = cfg.defaults
-        if isinstance(base_configs, list):
-            for base in base_configs:
-                if isinstance(base, str):
-                    base_path = os.path.join(os.path.dirname(args.config), f"{base}.yaml")
-                    if os.path.exists(base_path):
-                        base_cfg = OmegaConf.load(base_path)
-                        cfg = OmegaConf.merge(base_cfg, cfg)
+    cfg = load_config_with_inheritance(args.config)
 
     # Apply command-line overrides
     cfg = apply_config_overrides(cfg, overrides)
