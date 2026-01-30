@@ -22,7 +22,7 @@ hf_data_cfg:
   # Column mappings - adjust based on your dataset structure
   # For Common Voice: audio is in "audio" column with "array" and "sampling_rate"
   audio_column: "audio"  # Column containing audio data
-  text_column: "sentence"  # Column containing transcription
+  text_column: "text"  # Column containing transcription
 
   # Language tag for Parakeet multilingual format
   # Parakeet outputs: "transcription <lang-tag>" (e.g., "hello world <en-US>")
