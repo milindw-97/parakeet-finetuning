@@ -208,6 +208,34 @@ def prepare_hf_manifests(cfg: DictConfig, output_dir: str):
         max_dur = cfg.model.train_ds.get('max_duration', 20.0)
         lang_tag = hf_cfg.get('language_tag')
 
+        # Track skip reasons for debugging
+        skip_reasons = {
+            "no_audio_col": 0,
+            "audio_not_dict": 0,
+            "no_array": 0,
+            "no_text": 0,
+            "empty_text": 0,
+            "too_short": 0,
+            "too_long": 0,
+            "error": 0,
+        }
+
+        # Debug: show first example structure
+        first_example = next(iter(dataset))
+        print(f"\n[DEBUG] Dataset columns: {list(first_example.keys())}")
+        print(f"[DEBUG] Looking for audio_col='{audio_col}', text_col='{text_col}'")
+        if audio_col in first_example:
+            audio_sample = first_example[audio_col]
+            print(f"[DEBUG] Audio column type: {type(audio_sample)}")
+            if isinstance(audio_sample, dict):
+                print(f"[DEBUG] Audio dict keys: {list(audio_sample.keys())}")
+        else:
+            print(f"[DEBUG] WARNING: audio_col '{audio_col}' not found in dataset!")
+        if text_col in first_example:
+            print(f"[DEBUG] Text sample: {first_example[text_col][:100] if first_example[text_col] else 'None'}...")
+        else:
+            print(f"[DEBUG] WARNING: text_col '{text_col}' not found in dataset!")
+
         iterator = enumerate(dataset)
         if not hf_cfg.get('streaming', False):
             total = min(max_samples, len(dataset)) if max_samples else len(dataset)
@@ -221,23 +249,28 @@ def prepare_hf_manifests(cfg: DictConfig, output_dir: str):
                 # Get audio
                 audio_data = example.get(audio_col)
                 if audio_data is None:
+                    skip_reasons["no_audio_col"] += 1
                     continue
 
                 if isinstance(audio_data, dict):
                     array = audio_data.get("array")
                     sample_rate = audio_data.get("sampling_rate", 16000)
                 else:
+                    skip_reasons["audio_not_dict"] += 1
                     continue
 
                 if array is None:
+                    skip_reasons["no_array"] += 1
                     continue
 
                 # Get text
                 text = example.get(text_col, "")
                 if not text or not isinstance(text, str):
+                    skip_reasons["no_text"] += 1
                     continue
                 text = text.strip()
                 if not text:
+                    skip_reasons["empty_text"] += 1
                     continue
 
                 # Convert to numpy
@@ -248,7 +281,11 @@ def prepare_hf_manifests(cfg: DictConfig, output_dir: str):
                 duration = len(array) / sample_rate
 
                 # Filter by duration
-                if duration < min_dur or duration > max_dur:
+                if duration < min_dur:
+                    skip_reasons["too_short"] += 1
+                    continue
+                if duration > max_dur:
+                    skip_reasons["too_long"] += 1
                     continue
 
                 # Resample to 16kHz if needed
@@ -278,7 +315,9 @@ def prepare_hf_manifests(cfg: DictConfig, output_dir: str):
                 })
 
             except Exception as e:
-                print(f"Warning: Error processing {split_name} example {idx}: {e}")
+                skip_reasons["error"] += 1
+                if skip_reasons["error"] <= 3:  # Only print first 3 errors
+                    print(f"Warning: Error processing {split_name} example {idx}: {e}")
                 continue
 
         # Write manifest
@@ -286,8 +325,16 @@ def prepare_hf_manifests(cfg: DictConfig, output_dir: str):
             for entry in entries:
                 f.write(json.dumps(entry, ensure_ascii=False) + '\n')
 
-        total_duration = sum(e["duration"] for e in entries)
-        print(f"{split_name}: {len(entries)} examples, {total_duration/3600:.2f} hours")
+        total_duration = sum(e["duration"] for e in entries) if entries else 0
+        print(f"\n{split_name}: {len(entries)} examples, {total_duration/3600:.2f} hours")
+
+        # Print skip summary if any were skipped
+        total_skipped = sum(skip_reasons.values())
+        if total_skipped > 0:
+            print(f"  Skipped {total_skipped} samples:")
+            for reason, count in skip_reasons.items():
+                if count > 0:
+                    print(f"    - {reason}: {count}")
 
         return manifest_path
 
