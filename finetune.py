@@ -636,7 +636,42 @@ def main():
     print("Configuring model for finetuning...")
     model = setup_model_for_finetuning(model, cfg)
 
-    model.config.enable_cuda_graph = False
+    # Disable CUDA graphs for decoding (compatibility fix for PyTorch 2.10+ / CUDA 13)
+    def disable_cuda_graphs_recursive(obj, depth=0):
+        """Recursively disable CUDA graphs on all decoding components."""
+        if depth > 10:  # Prevent infinite recursion
+            return
+
+        # Direct attributes to set
+        for attr in ['use_cuda_graphs', 'cuda_graphs_mode', '_use_cuda_graphs']:
+            if hasattr(obj, attr):
+                try:
+                    setattr(obj, attr, False if 'use' in attr else None)
+                    print(f"[INFO] Disabled CUDA graphs: {type(obj).__name__}.{attr}")
+                except Exception:
+                    pass
+
+        # Recurse into common sub-objects
+        for sub_attr in ['decoding', 'decoding_computer', 'greedy_search', 'wer', 'joint']:
+            if hasattr(obj, sub_attr):
+                sub_obj = getattr(obj, sub_attr)
+                if sub_obj is not None:
+                    disable_cuda_graphs_recursive(sub_obj, depth + 1)
+
+    # Apply to model and its components
+    disable_cuda_graphs_recursive(model)
+
+    # Also try to change the decoding strategy to disable CUDA graphs
+    try:
+        decoding_cfg = model.cfg.decoding.copy()
+        with OmegaConf.open_dict(decoding_cfg):
+            decoding_cfg.greedy = decoding_cfg.get('greedy', OmegaConf.create({}))
+            with OmegaConf.open_dict(decoding_cfg.greedy):
+                decoding_cfg.greedy.cuda_graph_mode = None
+        model.change_decoding_strategy(decoding_cfg)
+        print("[INFO] Changed decoding strategy to disable CUDA graphs")
+    except Exception as e:
+        print(f"[WARN] Could not change decoding strategy: {e}")
 
     # Start training
     print("\n" + "=" * 60)
