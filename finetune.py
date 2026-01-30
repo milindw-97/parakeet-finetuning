@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # Disable CUDA graphs for RNNT decoding (compatibility fix for PyTorch 2.10+ / CUDA 13)
 import os
+
 os.environ["NEMO_RNNT_DISABLE_CUDA_GRAPHS"] = "1"
 
 """
@@ -49,53 +50,43 @@ from omegaconf import DictConfig, OmegaConf
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(
-        description="Finetune Parakeet RNNT model"
-    )
+    parser = argparse.ArgumentParser(description="Finetune Parakeet RNNT model")
     parser.add_argument(
-        "--config",
-        type=str,
-        required=True,
-        help="Path to configuration YAML file"
+        "--config", type=str, required=True, help="Path to configuration YAML file"
     )
     parser.add_argument(
         "--model",
         type=str,
         required=True,
-        help="Path to base .nemo model or previously finetuned model"
+        help="Path to base .nemo model or previously finetuned model",
     )
     parser.add_argument(
         "--output_dir",
         type=str,
         required=True,
-        help="Directory to save checkpoints and logs"
+        help="Directory to save checkpoints and logs",
     )
     parser.add_argument(
         "--resume",
         type=str,
         default=None,
-        help="Path to checkpoint to resume training from (optional)"
+        help="Path to checkpoint to resume training from (optional)",
     )
     parser.add_argument(
-        "--num_gpus",
-        type=int,
-        default=1,
-        help="Number of GPUs to use (default: 1)"
+        "--num_gpus", type=int, default=1, help="Number of GPUs to use (default: 1)"
     )
     parser.add_argument(
-        "--dry_run",
-        action="store_true",
-        help="Validate config without training"
+        "--dry_run", action="store_true", help="Validate config without training"
     )
     parser.add_argument(
         "--debug_config",
         action="store_true",
-        help="Print detailed config loading debug info"
+        help="Print detailed config loading debug info",
     )
     parser.add_argument(
         "--skip_data_prep",
         action="store_true",
-        help="Skip data preparation (use existing manifests from previous run)"
+        help="Skip data preparation (use existing manifests from previous run)",
     )
 
     # Allow arbitrary config overrides via Hydra-style arguments
@@ -103,28 +94,30 @@ def parse_args():
     return args, overrides
 
 
-def apply_config_overrides(cfg: DictConfig, overrides: list, verbose: bool = False) -> DictConfig:
+def apply_config_overrides(
+    cfg: DictConfig, overrides: list, verbose: bool = False
+) -> DictConfig:
     """Apply command-line config overrides in Hydra style."""
     if verbose and overrides:
         print(f"\nApplying {len(overrides)} config overrides:")
 
     for override in overrides:
-        if '=' not in override:
+        if "=" not in override:
             print(f"Warning: Ignoring invalid override (missing '='): {override}")
             continue
 
-        key, value = override.split('=', 1)
+        key, value = override.split("=", 1)
         original_value = value
 
         # Handle nested keys (e.g., hf_data_cfg.path)
-        keys = key.split('.')
+        keys = key.split(".")
 
         # Convert value to appropriate type
-        if value.lower() == 'true':
+        if value.lower() == "true":
             value = True
-        elif value.lower() == 'false':
+        elif value.lower() == "false":
             value = False
-        elif value.lower() == 'null' or value.lower() == 'none':
+        elif value.lower() == "null" or value.lower() == "none":
             value = None
         else:
             try:
@@ -160,18 +153,20 @@ def prepare_hf_manifests(cfg: DictConfig, output_dir: str):
     hf_cfg = cfg.hf_data_cfg
 
     print(f"Loading HuggingFace dataset: {hf_cfg.path}")
-    if hf_cfg.get('name'):
+    if hf_cfg.get("name"):
         print(f"Subset: {hf_cfg.name}")
-    if hf_cfg.get('language_tag'):
-        print(f"Language tag: <{hf_cfg.language_tag}> (will be appended to all transcripts)")
+    if hf_cfg.get("language_tag"):
+        print(
+            f"Language tag: <{hf_cfg.language_tag}> (will be appended to all transcripts)"
+        )
 
     # Load dataset with error handling for script-based datasets
     load_kwargs = {
         "path": hf_cfg.path,
-        "name": hf_cfg.get('name'),
-        "streaming": hf_cfg.get('streaming', False),
-        "cache_dir": hf_cfg.get('cache_dir'),
-        "trust_remote_code": hf_cfg.get('trust_remote_code', True),  # Default to True
+        "name": hf_cfg.get("name"),
+        "streaming": hf_cfg.get("streaming", False),
+        "cache_dir": hf_cfg.get("cache_dir"),
+        "trust_remote_code": hf_cfg.get("trust_remote_code", True),  # Default to True
     }
 
     try:
@@ -179,7 +174,9 @@ def prepare_hf_manifests(cfg: DictConfig, output_dir: str):
         val_ds = load_dataset(**load_kwargs, split=hf_cfg.val_split)
     except RuntimeError as e:
         if "Dataset scripts are no longer supported" in str(e):
-            print("\nError: This dataset uses a custom script which is not supported in datasets>=3.0")
+            print(
+                "\nError: This dataset uses a custom script which is not supported in datasets>=3.0"
+            )
             print("Solutions:")
             print("  1. Downgrade: pip install 'datasets<3.0'")
             print("  2. Use a dataset without custom scripts")
@@ -188,12 +185,12 @@ def prepare_hf_manifests(cfg: DictConfig, output_dir: str):
         raise
 
     # Apply sample limits if specified
-    max_train = hf_cfg.get('max_train_samples')
-    max_val = hf_cfg.get('max_val_samples')
+    max_train = hf_cfg.get("max_train_samples")
+    max_val = hf_cfg.get("max_val_samples")
 
-    if max_train and not hf_cfg.get('streaming', False):
+    if max_train and not hf_cfg.get("streaming", False):
         train_ds = train_ds.select(range(min(max_train, len(train_ds))))
-    if max_val and not hf_cfg.get('streaming', False):
+    if max_val and not hf_cfg.get("streaming", False):
         val_ds = val_ds.select(range(min(max_val, len(val_ds))))
 
     # Prepare output directories
@@ -208,9 +205,9 @@ def prepare_hf_manifests(cfg: DictConfig, output_dir: str):
 
         audio_col = hf_cfg.audio_column
         text_col = hf_cfg.text_column
-        min_dur = cfg.model.train_ds.get('min_duration', 0.1)
-        max_dur = cfg.model.train_ds.get('max_duration', 20.0)
-        lang_tag = hf_cfg.get('language_tag')
+        min_dur = cfg.model.train_ds.get("min_duration", 0.1)
+        max_dur = cfg.model.train_ds.get("max_duration", 20.0)
+        lang_tag = hf_cfg.get("language_tag")
 
         # Track skip reasons for debugging
         skip_reasons = {
@@ -236,14 +233,18 @@ def prepare_hf_manifests(cfg: DictConfig, output_dir: str):
         else:
             print(f"[DEBUG] WARNING: audio_col '{audio_col}' not found in dataset!")
         if text_col in first_example:
-            print(f"[DEBUG] Text sample: {first_example[text_col][:100] if first_example[text_col] else 'None'}...")
+            print(
+                f"[DEBUG] Text sample: {first_example[text_col][:100] if first_example[text_col] else 'None'}..."
+            )
         else:
             print(f"[DEBUG] WARNING: text_col '{text_col}' not found in dataset!")
 
         iterator = enumerate(dataset)
-        if not hf_cfg.get('streaming', False):
+        if not hf_cfg.get("streaming", False):
             total = min(max_samples, len(dataset)) if max_samples else len(dataset)
-            iterator = enumerate(tqdm(dataset, total=total, desc=f"Processing {split_name}"))
+            iterator = enumerate(
+                tqdm(dataset, total=total, desc=f"Processing {split_name}")
+            )
 
         for idx, example in iterator:
             if max_samples and idx >= max_samples:
@@ -296,9 +297,13 @@ def prepare_hf_manifests(cfg: DictConfig, output_dir: str):
                 if sample_rate != 16000:
                     try:
                         import librosa
-                        array = librosa.resample(array, orig_sr=sample_rate, target_sr=16000)
+
+                        array = librosa.resample(
+                            array, orig_sr=sample_rate, target_sr=16000
+                        )
                     except ImportError:
                         from scipy import signal
+
                         num_samples = int(len(array) * 16000 / sample_rate)
                         array = signal.resample(array, num_samples)
                     sample_rate = 16000
@@ -312,11 +317,13 @@ def prepare_hf_manifests(cfg: DictConfig, output_dir: str):
                 if lang_tag:
                     text = f"{text} <{lang_tag}>"
 
-                entries.append({
-                    "audio_filepath": os.path.abspath(audio_path),
-                    "text": text,
-                    "duration": round(duration, 3)
-                })
+                entries.append(
+                    {
+                        "audio_filepath": os.path.abspath(audio_path),
+                        "text": text,
+                        "duration": round(duration, 3),
+                    }
+                )
 
             except Exception as e:
                 skip_reasons["error"] += 1
@@ -325,12 +332,14 @@ def prepare_hf_manifests(cfg: DictConfig, output_dir: str):
                 continue
 
         # Write manifest
-        with open(manifest_path, 'w', encoding='utf-8') as f:
+        with open(manifest_path, "w", encoding="utf-8") as f:
             for entry in entries:
-                f.write(json.dumps(entry, ensure_ascii=False) + '\n')
+                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
         total_duration = sum(e["duration"] for e in entries) if entries else 0
-        print(f"\n{split_name}: {len(entries)} examples, {total_duration/3600:.2f} hours")
+        print(
+            f"\n{split_name}: {len(entries)} examples, {total_duration / 3600:.2f} hours"
+        )
 
         # Print skip summary if any were skipped
         total_skipped = sum(skip_reasons.values())
@@ -358,6 +367,7 @@ def setup_trainer(cfg: DictConfig, num_gpus: int):
     # Try to use NeMo's trainer if available (for compatibility)
     try:
         from nemo.lightning import NeMoLogger, Trainer as NeMoTrainer
+
         use_nemo_trainer = True
     except ImportError:
         use_nemo_trainer = False
@@ -398,24 +408,30 @@ def load_model(model_path: str, cfg: DictConfig):
 def setup_model_for_finetuning(model, cfg: DictConfig):
     """Configure model for finetuning."""
     # Update data loaders
-    if cfg.model.train_ds.manifest_filepath and cfg.model.train_ds.manifest_filepath != "__hf_generated__":
+    if (
+        cfg.model.train_ds.manifest_filepath
+        and cfg.model.train_ds.manifest_filepath != "__hf_generated__"
+    ):
         model.setup_training_data(cfg.model.train_ds)
 
-    if cfg.model.validation_ds.manifest_filepath and cfg.model.validation_ds.manifest_filepath != "__hf_generated__":
+    if (
+        cfg.model.validation_ds.manifest_filepath
+        and cfg.model.validation_ds.manifest_filepath != "__hf_generated__"
+    ):
         model.setup_validation_data(cfg.model.validation_ds)
 
     # Update optimizer
-    if cfg.model.get('optim'):
+    if cfg.model.get("optim"):
         model.setup_optimization(cfg.model.optim)
 
     # Update spec augment if specified
-    if cfg.model.get('spec_augment'):
+    if cfg.model.get("spec_augment"):
         spec_aug_cfg = cfg.model.spec_augment
-        if hasattr(model, 'spec_augmentation') and model.spec_augmentation is not None:
-            model.spec_augmentation.freq_masks = spec_aug_cfg.get('freq_masks', 2)
-            model.spec_augmentation.freq_width = spec_aug_cfg.get('freq_width', 27)
-            model.spec_augmentation.time_masks = spec_aug_cfg.get('time_masks', 10)
-            model.spec_augmentation.time_width = spec_aug_cfg.get('time_width', 0.05)
+        if hasattr(model, "spec_augmentation") and model.spec_augmentation is not None:
+            model.spec_augmentation.freq_masks = spec_aug_cfg.get("freq_masks", 2)
+            model.spec_augmentation.freq_width = spec_aug_cfg.get("freq_width", 27)
+            model.spec_augmentation.time_masks = spec_aug_cfg.get("time_masks", 10)
+            model.spec_augmentation.time_width = spec_aug_cfg.get("time_width", 0.05)
 
     return model
 
@@ -429,10 +445,10 @@ def load_config_with_inheritance(config_path: str, verbose: bool = False) -> Dic
         print(f"\n[DEBUG] Loaded config from: {config_path}")
 
     # Handle defaults/inheritance (Hydra-style)
-    defaults = OmegaConf.select(cfg, 'defaults')
+    defaults = OmegaConf.select(cfg, "defaults")
     if defaults is not None:
         # Convert to list if needed
-        if hasattr(defaults, '__iter__'):
+        if hasattr(defaults, "__iter__"):
             defaults_list = list(defaults)
         else:
             defaults_list = [defaults]
@@ -446,7 +462,7 @@ def load_config_with_inheritance(config_path: str, verbose: bool = False) -> Dic
             # Handle both string format and dict format
             if isinstance(default, str):
                 base_name = default
-            elif hasattr(default, 'keys'):
+            elif hasattr(default, "keys"):
                 # Format like: - base: finetune_base
                 base_name = list(default.values())[0]
             else:
@@ -463,7 +479,7 @@ def load_config_with_inheritance(config_path: str, verbose: bool = False) -> Dic
 
         # Remove defaults from current config before merging
         cfg_dict = OmegaConf.to_container(cfg)
-        cfg_dict.pop('defaults', None)
+        cfg_dict.pop("defaults", None)
         cfg = OmegaConf.create(cfg_dict)
 
         if verbose:
@@ -502,11 +518,11 @@ def main():
         cfg.model.resume_from_checkpoint = args.resume
 
     # Print final config
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("Configuration:")
-    print("="*60)
+    print("=" * 60)
     print(OmegaConf.to_yaml(cfg))
-    print("="*60 + "\n")
+    print("=" * 60 + "\n")
 
     if args.dry_run:
         print("Dry run complete. Configuration is valid.")
@@ -517,13 +533,15 @@ def main():
         import nemo.collections.asr as nemo_asr
         from nemo.utils.exp_manager import exp_manager
     except ImportError:
-        print("Error: NeMo is not installed. Install with: pip install nemo_toolkit[asr]")
+        print(
+            "Error: NeMo is not installed. Install with: pip install nemo_toolkit[asr]"
+        )
         sys.exit(1)
 
     # Prepare data based on source
-    data_source = cfg.get('data_source', 'local')
+    data_source = cfg.get("data_source", "local")
 
-    if data_source == 'huggingface':
+    if data_source == "huggingface":
         data_dir = os.path.join(args.output_dir, "hf_data")
         train_manifest = os.path.join(data_dir, "train_manifest.json")
         val_manifest = os.path.join(data_dir, "val_manifest.json")
@@ -536,7 +554,9 @@ def main():
                 print(f"  Val: {val_manifest}")
             else:
                 print("Error: --skip_data_prep specified but manifests not found:")
-                print(f"  Train: {train_manifest} (exists: {os.path.exists(train_manifest)})")
+                print(
+                    f"  Train: {train_manifest} (exists: {os.path.exists(train_manifest)})"
+                )
                 print(f"  Val: {val_manifest} (exists: {os.path.exists(val_manifest)})")
                 sys.exit(1)
         else:
@@ -548,16 +568,16 @@ def main():
         cfg.model.train_ds.manifest_filepath = train_manifest
         cfg.model.validation_ds.manifest_filepath = val_manifest
 
-    elif data_source == 'local':
+    elif data_source == "local":
         # Validate manifest paths
         train_manifest = cfg.model.train_ds.manifest_filepath
         val_manifest = cfg.model.validation_ds.manifest_filepath
 
         if not train_manifest or train_manifest == "__hf_generated__":
-            train_manifest = cfg.get('local_data_cfg', {}).get('train_manifest')
+            train_manifest = cfg.get("local_data_cfg", {}).get("train_manifest")
 
         if not val_manifest or val_manifest == "__hf_generated__":
-            val_manifest = cfg.get('local_data_cfg', {}).get('val_manifest')
+            val_manifest = cfg.get("local_data_cfg", {}).get("val_manifest")
 
         if not train_manifest:
             print("Error: Training manifest not specified.")
@@ -586,12 +606,22 @@ def main():
     exp_manager_cfg = {
         "exp_dir": cfg.exp_manager.get("exp_dir"),
         "name": cfg.exp_manager.get("name", "parakeet_finetune"),
-        "create_tensorboard_logger": cfg.exp_manager.get("create_tensorboard_logger", True),
+        "create_tensorboard_logger": cfg.exp_manager.get(
+            "create_tensorboard_logger", True
+        ),
         "create_wandb_logger": cfg.exp_manager.get("create_wandb_logger", False),
-        "create_checkpoint_callback": cfg.exp_manager.get("create_checkpoint_callback", True),
-        "checkpoint_callback_params": OmegaConf.to_container(cfg.exp_manager.checkpoint_callback_params) if "checkpoint_callback_params" in cfg.exp_manager else {},
+        "create_checkpoint_callback": cfg.exp_manager.get(
+            "create_checkpoint_callback", True
+        ),
+        "checkpoint_callback_params": OmegaConf.to_container(
+            cfg.exp_manager.checkpoint_callback_params
+        )
+        if "checkpoint_callback_params" in cfg.exp_manager
+        else {},
         "resume_if_exists": cfg.exp_manager.get("resume_if_exists", True),
-        "resume_ignore_no_checkpoint": cfg.exp_manager.get("resume_ignore_no_checkpoint", True),
+        "resume_ignore_no_checkpoint": cfg.exp_manager.get(
+            "resume_ignore_no_checkpoint", True
+        ),
     }
     exp_manager(trainer, exp_manager_cfg)
 
@@ -606,13 +636,15 @@ def main():
     print("Configuring model for finetuning...")
     model = setup_model_for_finetuning(model, cfg)
 
+    model.config.enable_cuda_graph = False
+
     # Start training
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("Starting training...")
-    print("="*60 + "\n")
+    print("=" * 60 + "\n")
 
     # Resume from checkpoint if specified
-    ckpt_path = args.resume or cfg.model.get('resume_from_checkpoint')
+    ckpt_path = args.resume or cfg.model.get("resume_from_checkpoint")
 
     trainer.fit(model, ckpt_path=ckpt_path)
 
