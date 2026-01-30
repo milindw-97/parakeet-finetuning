@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-# Disable CUDA graphs for RNNT decoding (compatibility fix for PyTorch 2.10+ / CUDA 13)
 import os
+import torch
 
-os.environ["NEMO_RNNT_DISABLE_CUDA_GRAPHS"] = "1"
+# Optimize for Tensor Cores on Ampere/Ada/Blackwell GPUs
+# Trades minor precision for significant performance gains in matmul operations
+torch.set_float32_matmul_precision('high')
 
 """
 Finetune Parakeet RNNT 1.1B model using NeMo framework.
@@ -538,6 +540,26 @@ def main():
         )
         sys.exit(1)
 
+    # CRITICAL: Apply monkey-patch to disable CUDA graphs BEFORE model loading
+    # This is needed for PyTorch 2.10+ / CUDA 13 compatibility where the CUDA graph
+    # capture API changed and NeMo 2.6.1 hasn't been updated
+    print("\n[INFO] Applying CUDA graph compatibility patch for PyTorch 2.10+ / CUDA 13...")
+    try:
+        from nemo.collections.asr.parts.submodules import rnnt_greedy_decoding
+
+        _original_greedy_init = rnnt_greedy_decoding.GreedyBatchedRNNTInfer.__init__
+
+        def _patched_greedy_init(self, *args, **kwargs):
+            # Force disable CUDA graph decoder
+            kwargs['use_cuda_graph_decoder'] = False
+            return _original_greedy_init(self, *args, **kwargs)
+
+        rnnt_greedy_decoding.GreedyBatchedRNNTInfer.__init__ = _patched_greedy_init
+        print("[INFO] Successfully patched GreedyBatchedRNNTInfer to disable CUDA graphs")
+    except Exception as e:
+        print(f"[WARN] Could not patch GreedyBatchedRNNTInfer: {e}")
+        print("[WARN] If training fails with CUDA graph errors, consider downgrading PyTorch to ~2.5")
+
     # Prepare data based on source
     data_source = cfg.get("data_source", "local")
 
@@ -636,42 +658,18 @@ def main():
     print("Configuring model for finetuning...")
     model = setup_model_for_finetuning(model, cfg)
 
-    # Disable CUDA graphs for decoding (compatibility fix for PyTorch 2.10+ / CUDA 13)
-    def disable_cuda_graphs_recursive(obj, depth=0):
-        """Recursively disable CUDA graphs on all decoding components."""
-        if depth > 10:  # Prevent infinite recursion
-            return
-
-        # Direct attributes to set
-        for attr in ['use_cuda_graphs', 'cuda_graphs_mode', '_use_cuda_graphs']:
-            if hasattr(obj, attr):
-                try:
-                    setattr(obj, attr, False if 'use' in attr else None)
-                    print(f"[INFO] Disabled CUDA graphs: {type(obj).__name__}.{attr}")
-                except Exception:
-                    pass
-
-        # Recurse into common sub-objects
-        for sub_attr in ['decoding', 'decoding_computer', 'greedy_search', 'wer', 'joint']:
-            if hasattr(obj, sub_attr):
-                sub_obj = getattr(obj, sub_attr)
-                if sub_obj is not None:
-                    disable_cuda_graphs_recursive(sub_obj, depth + 1)
-
-    # Apply to model and its components
-    disable_cuda_graphs_recursive(model)
-
-    # Also try to change the decoding strategy to disable CUDA graphs
+    # Additional CUDA graph disabling after model load (belt and suspenders approach)
+    # The monkey-patch applied earlier should handle this, but this is a backup
     try:
-        decoding_cfg = model.cfg.decoding.copy()
-        with OmegaConf.open_dict(decoding_cfg):
-            decoding_cfg.greedy = decoding_cfg.get('greedy', OmegaConf.create({}))
-            with OmegaConf.open_dict(decoding_cfg.greedy):
-                decoding_cfg.greedy.cuda_graph_mode = None
-        model.change_decoding_strategy(decoding_cfg)
-        print("[INFO] Changed decoding strategy to disable CUDA graphs")
+        if hasattr(model, 'decoding') and model.decoding is not None:
+            if hasattr(model.decoding, 'decoding'):
+                decoder = model.decoding.decoding
+                for attr in ['use_cuda_graph_decoder', '_cuda_graphs_enabled', 'cuda_graphs_enabled']:
+                    if hasattr(decoder, attr):
+                        setattr(decoder, attr, False)
+                        print(f"[INFO] Set {attr}=False on model.decoding.decoding")
     except Exception as e:
-        print(f"[WARN] Could not change decoding strategy: {e}")
+        print(f"[DEBUG] Post-load CUDA graph disable: {e}")
 
     # Start training
     print("\n" + "=" * 60)
