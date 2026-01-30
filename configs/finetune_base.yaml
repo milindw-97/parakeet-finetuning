@@ -13,8 +13,8 @@ trainer:
   val_check_interval: 1  # Validate every epoch (1.0 = 100% of epoch)
   check_val_every_n_epoch: null  # Required for float val_check_interval
   log_every_n_steps: 50
-  enable_checkpointing: true
-  logger: true
+  enable_checkpointing: false  # Let exp_manager handle checkpointing
+  logger: false  # Let exp_manager handle logging
   num_sanity_val_steps: 2
 
 # Experiment manager (logging and checkpointing)
