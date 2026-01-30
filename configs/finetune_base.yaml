@@ -1,8 +1,6 @@
 # Base configuration for Parakeet RNNT 1.1B finetuning
 # This file contains shared settings - extend with finetune_huggingface.yaml or finetune_local.yaml
 
-name: "parakeet_rnnt_finetune"
-
 # Trainer configuration
 trainer:
   devices: 1
@@ -22,7 +20,7 @@ trainer:
 # Experiment manager (logging and checkpointing)
 exp_manager:
   exp_dir: null  # Set via --output_dir
-  name: ${name}
+  name: "parakeet_rnnt_finetune"
   create_tensorboard_logger: true
   create_wandb_logger: false
   create_checkpoint_callback: true
