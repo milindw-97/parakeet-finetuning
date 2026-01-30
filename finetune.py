@@ -607,26 +607,20 @@ def main():
     print("Starting training...")
     print("="*60 + "\n")
 
-    # Debug: Check model inheritance
-    from pytorch_lightning import LightningModule
-    print(f"[DEBUG] Model type: {type(model)}")
-    print(f"[DEBUG] Model MRO: {[c.__name__ for c in type(model).__mro__[:5]]}")
-    print(f"[DEBUG] Is LightningModule: {isinstance(model, LightningModule)}")
+    # Fix PTL/NeMo LightningModule mismatch by registering as virtual subclass
+    from pytorch_lightning import LightningModule as PTL_LightningModule
+    from nemo.core import ModelPT
+
+    # Register NeMo's ModelPT as a virtual subclass of PTL's LightningModule
+    # This fixes isinstance() checks in newer PyTorch Lightning versions
+    if not isinstance(model, PTL_LightningModule):
+        PTL_LightningModule.register(ModelPT)
+        print(f"[INFO] Registered ModelPT as LightningModule subclass")
 
     # Resume from checkpoint if specified
     ckpt_path = args.resume or cfg.model.get('resume_from_checkpoint')
 
-    # Use model's fit method if trainer.fit fails
-    try:
-        trainer.fit(model, ckpt_path=ckpt_path)
-    except TypeError as e:
-        if "LightningModule" in str(e):
-            print("\n[WARN] Direct trainer.fit failed, trying alternative approach...")
-            # Alternative: use the model's internal trainer
-            model._trainer = trainer
-            trainer.fit(model, ckpt_path=ckpt_path)
-        else:
-            raise
+    trainer.fit(model, ckpt_path=ckpt_path)
 
     # Save final model
     final_model_path = os.path.join(args.output_dir, "final_model.nemo")
