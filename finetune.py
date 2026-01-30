@@ -498,7 +498,18 @@ def main():
     trainer = setup_trainer(cfg, args.num_gpus)
 
     # Setup experiment manager
-    exp_manager(trainer, OmegaConf.to_container(cfg.exp_manager))
+    # Convert to plain dict to avoid OmegaConf interpolation issues
+    exp_manager_cfg = {
+        "exp_dir": cfg.exp_manager.get("exp_dir"),
+        "name": cfg.exp_manager.get("name", "parakeet_finetune"),
+        "create_tensorboard_logger": cfg.exp_manager.get("create_tensorboard_logger", True),
+        "create_wandb_logger": cfg.exp_manager.get("create_wandb_logger", False),
+        "create_checkpoint_callback": cfg.exp_manager.get("create_checkpoint_callback", True),
+        "checkpoint_callback_params": OmegaConf.to_container(cfg.exp_manager.checkpoint_callback_params) if "checkpoint_callback_params" in cfg.exp_manager else {},
+        "resume_if_exists": cfg.exp_manager.get("resume_if_exists", True),
+        "resume_ignore_no_checkpoint": cfg.exp_manager.get("resume_ignore_no_checkpoint", True),
+    }
+    exp_manager(trainer, exp_manager_cfg)
 
     # Load model
     print("\nLoading model...")
