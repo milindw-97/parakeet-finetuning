@@ -607,15 +607,20 @@ def main():
     print("Starting training...")
     print("="*60 + "\n")
 
-    # Fix PTL/NeMo LightningModule mismatch by registering as virtual subclass
-    from pytorch_lightning import LightningModule as PTL_LightningModule
-    from nemo.core import ModelPT
+    # Fix PTL/NeMo LightningModule mismatch by patching the type check
+    # This is needed when NeMo and PTL have different LightningModule imports
+    import pytorch_lightning.utilities.compile as pl_compile
+    original_maybe_unwrap = pl_compile._maybe_unwrap_optimized
 
-    # Register NeMo's ModelPT as a virtual subclass of PTL's LightningModule
-    # This fixes isinstance() checks in newer PyTorch Lightning versions
-    if not isinstance(model, PTL_LightningModule):
-        PTL_LightningModule.register(ModelPT)
-        print(f"[INFO] Registered ModelPT as LightningModule subclass")
+    def patched_maybe_unwrap(model):
+        """Patched version that accepts NeMo models."""
+        from nemo.core import ModelPT
+        if isinstance(model, ModelPT):
+            return model
+        return original_maybe_unwrap(model)
+
+    pl_compile._maybe_unwrap_optimized = patched_maybe_unwrap
+    print("[INFO] Patched PTL model type check for NeMo compatibility")
 
     # Resume from checkpoint if specified
     ckpt_path = args.resume or cfg.model.get('resume_from_checkpoint')
