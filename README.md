@@ -324,6 +324,14 @@ parakeet-finetuning/
 └── README.md                       # This file
 ```
 
+## IMPORTANT: NeMo Bug Fix:
+```bash
+# Find the file on your server                                                                                                                                                                          
+NEMO_FILE=$(python3 -c "import nemo; import os; print(os.path.join(os.path.dirname(nemo.__file__), 'collections/asr/parts/submodules/transducer_decoding/rnnt_label_looping.py')")
+# Apply the fix (change 6 underscores to 5)
+sed -i 's/capture_status, _, graph, _, _, _ = cu_call/capture_status, _, graph, _, _ = cu_call/' "$NEMO_FILE"
+```
+
 ## License
 
 This project is provided for educational and research purposes. The Parakeet model is subject to NVIDIA's license terms.
