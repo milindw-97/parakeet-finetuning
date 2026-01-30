@@ -88,6 +88,11 @@ def parse_args():
         action="store_true",
         help="Print detailed config loading debug info"
     )
+    parser.add_argument(
+        "--skip_data_prep",
+        action="store_true",
+        help="Skip data preparation (use existing manifests from previous run)"
+    )
 
     # Allow arbitrary config overrides via Hydra-style arguments
     args, overrides = parser.parse_known_args()
@@ -309,6 +314,10 @@ def setup_trainer(cfg: DictConfig, num_gpus: int) -> pl.Trainer:
         trainer_cfg.devices = 1
         trainer_cfg.strategy = "auto"
 
+    # Force logger and checkpointing off - exp_manager handles these
+    trainer_cfg.logger = False
+    trainer_cfg.enable_checkpointing = False
+
     # Create trainer
     trainer = pl.Trainer(**OmegaConf.to_container(trainer_cfg))
 
@@ -454,11 +463,25 @@ def main():
     data_source = cfg.get('data_source', 'local')
 
     if data_source == 'huggingface':
-        print("\nPreparing HuggingFace dataset...")
         data_dir = os.path.join(args.output_dir, "hf_data")
-        os.makedirs(data_dir, exist_ok=True)
+        train_manifest = os.path.join(data_dir, "train_manifest.json")
+        val_manifest = os.path.join(data_dir, "val_manifest.json")
 
-        train_manifest, val_manifest = prepare_hf_manifests(cfg, data_dir)
+        # Check if we can skip data prep
+        if args.skip_data_prep:
+            if os.path.exists(train_manifest) and os.path.exists(val_manifest):
+                print(f"\n--skip_data_prep: Using existing manifests:")
+                print(f"  Train: {train_manifest}")
+                print(f"  Val: {val_manifest}")
+            else:
+                print("Error: --skip_data_prep specified but manifests not found:")
+                print(f"  Train: {train_manifest} (exists: {os.path.exists(train_manifest)})")
+                print(f"  Val: {val_manifest} (exists: {os.path.exists(val_manifest)})")
+                sys.exit(1)
+        else:
+            print("\nPreparing HuggingFace dataset...")
+            os.makedirs(data_dir, exist_ok=True)
+            train_manifest, val_manifest = prepare_hf_manifests(cfg, data_dir)
 
         # Update config with generated manifests
         cfg.model.train_ds.manifest_filepath = train_manifest
