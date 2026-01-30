@@ -39,7 +39,7 @@ import tempfile
 from pathlib import Path
 from typing import Optional
 
-import pytorch_lightning as pl
+import lightning.pytorch as pl
 import torch
 from omegaconf import DictConfig, OmegaConf
 
@@ -374,7 +374,7 @@ def setup_trainer(cfg: DictConfig, num_gpus: int):
 
     # Create trainer - use NeMo's import to ensure compatibility
     from nemo.core.config import hydra_runner
-    from pytorch_lightning import Trainer
+    from lightning.pytorch import Trainer
 
     trainer = Trainer(**OmegaConf.to_container(trainer_cfg))
 
@@ -606,32 +606,6 @@ def main():
     print("\n" + "="*60)
     print("Starting training...")
     print("="*60 + "\n")
-
-    # Fix PTL/NeMo LightningModule mismatch by patching the type check
-    # Patch in both locations where it might be imported
-    from nemo.core import ModelPT
-
-    def patched_maybe_unwrap(model):
-        """Patched version that accepts NeMo models."""
-        if isinstance(model, ModelPT):
-            return model
-        # Original logic for torch.compile models
-        import torch._dynamo
-        if isinstance(model, torch._dynamo.OptimizedModule):
-            return model._orig_mod
-        from pytorch_lightning import LightningModule
-        if not isinstance(model, LightningModule):
-            raise TypeError(
-                f"`model` must be a `LightningModule` or `torch._dynamo.OptimizedModule`, got `{type(model).__name__}`"
-            )
-        return model
-
-    # Patch in both modules
-    import pytorch_lightning.utilities.compile as pl_compile
-    import pytorch_lightning.trainer.trainer as pl_trainer
-    pl_compile._maybe_unwrap_optimized = patched_maybe_unwrap
-    pl_trainer._maybe_unwrap_optimized = patched_maybe_unwrap
-    print("[INFO] Patched PTL model type check for NeMo compatibility")
 
     # Resume from checkpoint if specified
     ckpt_path = args.resume or cfg.model.get('resume_from_checkpoint')
