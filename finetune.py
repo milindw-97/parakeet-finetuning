@@ -585,6 +585,9 @@ def main():
     print("\nLoading model...")
     model = load_model(args.model, cfg)
 
+    # Connect model to trainer (required for NeMo + PyTorch Lightning 2.x)
+    model.set_trainer(trainer)
+
     # Configure model for finetuning
     print("Configuring model for finetuning...")
     model = setup_model_for_finetuning(model, cfg)
