@@ -608,18 +608,29 @@ def main():
     print("="*60 + "\n")
 
     # Fix PTL/NeMo LightningModule mismatch by patching the type check
-    # This is needed when NeMo and PTL have different LightningModule imports
-    import pytorch_lightning.utilities.compile as pl_compile
-    original_maybe_unwrap = pl_compile._maybe_unwrap_optimized
+    # Patch in both locations where it might be imported
+    from nemo.core import ModelPT
 
     def patched_maybe_unwrap(model):
         """Patched version that accepts NeMo models."""
-        from nemo.core import ModelPT
         if isinstance(model, ModelPT):
             return model
-        return original_maybe_unwrap(model)
+        # Original logic for torch.compile models
+        import torch._dynamo
+        if isinstance(model, torch._dynamo.OptimizedModule):
+            return model._orig_mod
+        from pytorch_lightning import LightningModule
+        if not isinstance(model, LightningModule):
+            raise TypeError(
+                f"`model` must be a `LightningModule` or `torch._dynamo.OptimizedModule`, got `{type(model).__name__}`"
+            )
+        return model
 
+    # Patch in both modules
+    import pytorch_lightning.utilities.compile as pl_compile
+    import pytorch_lightning.trainer.trainer as pl_trainer
     pl_compile._maybe_unwrap_optimized = patched_maybe_unwrap
+    pl_trainer._maybe_unwrap_optimized = patched_maybe_unwrap
     print("[INFO] Patched PTL model type check for NeMo compatibility")
 
     # Resume from checkpoint if specified
