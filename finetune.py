@@ -144,24 +144,27 @@ def prepare_hf_manifests(cfg: DictConfig, output_dir: str):
     if hf_cfg.get('language_tag'):
         print(f"Language tag: <{hf_cfg.language_tag}> (will be appended to all transcripts)")
 
-    # Load dataset
-    train_ds = load_dataset(
-        hf_cfg.path,
-        hf_cfg.get('name'),
-        split=hf_cfg.train_split,
-        streaming=hf_cfg.get('streaming', False),
-        cache_dir=hf_cfg.get('cache_dir'),
-        trust_remote_code=hf_cfg.get('trust_remote_code', False)
-    )
+    # Load dataset with error handling for script-based datasets
+    load_kwargs = {
+        "path": hf_cfg.path,
+        "name": hf_cfg.get('name'),
+        "streaming": hf_cfg.get('streaming', False),
+        "cache_dir": hf_cfg.get('cache_dir'),
+        "trust_remote_code": hf_cfg.get('trust_remote_code', True),  # Default to True
+    }
 
-    val_ds = load_dataset(
-        hf_cfg.path,
-        hf_cfg.get('name'),
-        split=hf_cfg.val_split,
-        streaming=hf_cfg.get('streaming', False),
-        cache_dir=hf_cfg.get('cache_dir'),
-        trust_remote_code=hf_cfg.get('trust_remote_code', False)
-    )
+    try:
+        train_ds = load_dataset(**load_kwargs, split=hf_cfg.train_split)
+        val_ds = load_dataset(**load_kwargs, split=hf_cfg.val_split)
+    except RuntimeError as e:
+        if "Dataset scripts are no longer supported" in str(e):
+            print("\nError: This dataset uses a custom script which is not supported in datasets>=3.0")
+            print("Solutions:")
+            print("  1. Downgrade: pip install 'datasets<3.0'")
+            print("  2. Use a dataset without custom scripts")
+            print("  3. Download the data manually and use local data config instead")
+            sys.exit(1)
+        raise
 
     # Apply sample limits if specified
     max_train = hf_cfg.get('max_train_samples')

@@ -13,11 +13,11 @@ hf_data_cfg:
   path: "mozilla-foundation/common_voice_16_1"
 
   # Dataset subset/configuration name (often language code)
-  name: "hi"  # Hindi
+  name: null
 
   # Split names
   train_split: "train"
-  val_split: "validation"
+  val_split: "test"
 
   # Column mappings - adjust based on your dataset structure
   # For Common Voice: audio is in "audio" column with "array" and "sampling_rate"
