@@ -347,9 +347,16 @@ def prepare_hf_manifests(cfg: DictConfig, output_dir: str):
     return train_manifest, val_manifest
 
 
-def setup_trainer(cfg: DictConfig, num_gpus: int) -> pl.Trainer:
+def setup_trainer(cfg: DictConfig, num_gpus: int):
     """Setup PyTorch Lightning trainer."""
     from nemo.utils.exp_manager import exp_manager
+
+    # Try to use NeMo's trainer if available (for compatibility)
+    try:
+        from nemo.lightning import NeMoLogger, Trainer as NeMoTrainer
+        use_nemo_trainer = True
+    except ImportError:
+        use_nemo_trainer = False
 
     trainer_cfg = cfg.trainer
 
@@ -365,8 +372,11 @@ def setup_trainer(cfg: DictConfig, num_gpus: int) -> pl.Trainer:
     trainer_cfg.logger = False
     trainer_cfg.enable_checkpointing = False
 
-    # Create trainer
-    trainer = pl.Trainer(**OmegaConf.to_container(trainer_cfg))
+    # Create trainer - use NeMo's import to ensure compatibility
+    from nemo.core.config import hydra_runner
+    from pytorch_lightning import Trainer
+
+    trainer = Trainer(**OmegaConf.to_container(trainer_cfg))
 
     return trainer
 
@@ -597,10 +607,26 @@ def main():
     print("Starting training...")
     print("="*60 + "\n")
 
+    # Debug: Check model inheritance
+    from pytorch_lightning import LightningModule
+    print(f"[DEBUG] Model type: {type(model)}")
+    print(f"[DEBUG] Model MRO: {[c.__name__ for c in type(model).__mro__[:5]]}")
+    print(f"[DEBUG] Is LightningModule: {isinstance(model, LightningModule)}")
+
     # Resume from checkpoint if specified
     ckpt_path = args.resume or cfg.model.get('resume_from_checkpoint')
 
-    trainer.fit(model, ckpt_path=ckpt_path)
+    # Use model's fit method if trainer.fit fails
+    try:
+        trainer.fit(model, ckpt_path=ckpt_path)
+    except TypeError as e:
+        if "LightningModule" in str(e):
+            print("\n[WARN] Direct trainer.fit failed, trying alternative approach...")
+            # Alternative: use the model's internal trainer
+            model._trainer = trainer
+            trainer.fit(model, ckpt_path=ckpt_path)
+        else:
+            raise
 
     # Save final model
     final_model_path = os.path.join(args.output_dir, "final_model.nemo")
