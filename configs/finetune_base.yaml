@@ -12,12 +12,12 @@ trainer:
   precision: "bf16-mixed"  # Use bf16 on Ampere/Ada GPUs
   accumulate_grad_batches: 2
   gradient_clip_val: 1.0
-  val_check_interval: 0.5  # Validate twice per epoch
+  val_check_interval: 1.0  # Validate every epoch (1.0 = 100% of epoch)
+  check_val_every_n_epoch: 1  # Required for float val_check_interval
   log_every_n_steps: 50
   enable_checkpointing: true
   logger: true
   num_sanity_val_steps: 2
-  check_val_every_n_epoch: null  # Use val_check_interval instead
 
 # Experiment manager (logging and checkpointing)
 exp_manager:
